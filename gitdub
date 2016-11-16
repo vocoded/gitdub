@@ -47,6 +47,7 @@ class GitNotifier
     begin
       $logger.debug("> running in #{path}")
       $logger.debug("> git init, fetch, and remote update for #{repo}")
+
       system('git', '--bare', 'init', '--quiet')
       system('git', '--bare', 'fetch', '--quiet', repo, '+refs/heads/*:refs/heads/*')
       system('git', '--bare', 'fetch', '--quiet', repo, '+refs/tags/*:refs/tags/*')
@@ -54,7 +55,7 @@ class GitNotifier
 
       args = args.flatten.delete_if { |x| x.nil? }
       $logger.debug("> #{@@notifier_path}/git-notifier #{args}")
-      #success = system("#{@@notifier_path}/git-notifier", *args)
+      success = system("#{@@notifier_path}/git-notifier", *args)
       raise "git-notifier failed in #{path} with args: #{args}" unless success
     rescue Exception => e
       $logger.error(e)
@@ -132,12 +133,13 @@ class GitDubServer < Sinatra::Base
 
   def protected!
     return if authorized?
-    headers['WWW-Authenticate'] = 'Basic realm="Restricted Area"'
+    headers['WWW-Authenticate'] = 'Basic realm="Zello GitNotifier"'
     halt 401, "Not authorized\n"
   end
 
   def authorized?
-    @auth ||=  Rack::Auth::Basic::Request.new(request.env)
+    return true if !settings.authuser
+    @auth ||= Rack::Auth::Basic::Request.new(request.env)
     @auth.provided? and @auth.basic? and @auth.credentials and @auth.credentials == [settings.authuser, settings.authpass]
   end
 
@@ -147,6 +149,7 @@ class GitDubServer < Sinatra::Base
   end
 
   post '/' do
+    protected!
     sources = settings.allowed_sources
     if not sources.empty? and not sources.include?(request.ip)
       $logger.info("discarding request from disallowed address #{request.ip}")
@@ -202,17 +205,22 @@ def run(config)
 
     cert = File.open(config['gitdub']['ssl']['cert']).read
     key = File.open(config['gitdub']['ssl']['key']).read
+
     webrick_options = {
       app:            GitDubServer,
-      Host:    config['gitdub']['bind'],
+      Host:           config['gitdub']['bind'],
       Port:           config['gitdub']['port'],
       Logger:         $logger,
       SSLEnable:      true,
       SSLCertificate: OpenSSL::X509::Certificate.new(cert),
       SSLPrivateKey:  OpenSSL::PKey::RSA.new(key),
       SSLCertName:    [['CN', WEBrick::Utils::getservername]],
-      SSLExtraChainCert: [OpenSSL::X509::Certificate.new(File.open(config['gitdub']['ssl']['intcert']).read)]
     }
+
+    if config['gitdub']['ssl']['chain']
+      chain = File.open(config['gitdub']['ssl']['intcert']).read
+      webrick_options[:SSLExtraChainCert] = [OpenSSL::X509::Certificate.new(chain)]
+    end
 
     Rack::Server.start(webrick_options)
   end
