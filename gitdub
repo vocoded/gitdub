@@ -70,16 +70,17 @@ class GitDub
     @notifier = config['notifier']
     @github = config['github']
     @silent_init = config['gitdub']['silent_init']
+    @dir = config['gitdub']['directory'] 
 
-    dir = config['gitdub']['directory']
-    if dir != '.'
-      $logger.info("switching into working directory #{dir}")
-      Dir.mkdir(dir) unless Dir.exists?(dir)
-      Dir.chdir(dir)
+    if @dir != '.'
+      $logger.info("switching into working directory #{@dir}")
+      Dir.mkdir(@dir) unless Dir.exists?(@dir)
+      Dir.chdir(@dir)
     end
   end
 
   def process(push)
+    Dir.chdir(@dir)
     opts = @notifier.clone
     url = push['repository']['url']
     user = push['repository']['owner']['name']
