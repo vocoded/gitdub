@@ -130,7 +130,19 @@ class GitDubServer < Sinatra::Base
     set(:port, settings.port)
   end
 
+  def protected!
+    return if authorized?
+    headers['WWW-Authenticate'] = 'Basic realm="Restricted Area"'
+    halt 401, "Not authorized\n"
+  end
+
+  def authorized?
+    @auth ||=  Rack::Auth::Basic::Request.new(request.env)
+    @auth.provided? and @auth.basic? and @auth.credentials and @auth.credentials == [settings.authuser, settings.authpass]
+  end
+
   get '/' do
+    protected!
     "Use #{request.url} as WebHook URL in your github repository settings."
   end
 
@@ -178,6 +190,8 @@ def run(config)
   GitDubServer.set(:bind, config['gitdub']['bind'])
   GitDubServer.set(:port, config['gitdub']['port'])
   GitDubServer.set(:debug_post, config['gitdub']['debug'])
+  GitDubServer.set(:authuser, config['gitdub']['authuser'])
+  GitDubServer.set(:authpass, config['gitdub']['authpass'])
   GitDubServer.set(:allowed_sources, config['gitdub']['allowed_sources'])
 
   if not config['gitdub']['ssl']['enable']
@@ -190,13 +204,14 @@ def run(config)
     key = File.open(config['gitdub']['ssl']['key']).read
     webrick_options = {
       app:            GitDubServer,
-      BindAddress:    config['gitdub']['bind'],
+      Host:    config['gitdub']['bind'],
       Port:           config['gitdub']['port'],
       Logger:         $logger,
       SSLEnable:      true,
       SSLCertificate: OpenSSL::X509::Certificate.new(cert),
       SSLPrivateKey:  OpenSSL::PKey::RSA.new(key),
-      SSLCertName:    [['CN', WEBrick::Utils::getservername]]
+      SSLCertName:    [['CN', WEBrick::Utils::getservername]],
+      SSLExtraChainCert: [OpenSSL::X509::Certificate.new(File.open(config['gitdub']['ssl']['intcert']).read)]
     }
 
     Rack::Server.start(webrick_options)
