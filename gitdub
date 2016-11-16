@@ -11,6 +11,8 @@ class GitNotifier
 
   private
 
+  @@notifier_path = ""
+
   MAPPINGS = {
     'from' => 'sender',
     'to' => 'mailinglist',
@@ -20,16 +22,20 @@ class GitNotifier
 
   public
 
-  def self.run(path, opts)
+  def self.set_notifier_path(path)
+    @@notifier_path = path
+  end
+
+  def self.run(repo, path, opts)
     args = Hash[opts.map { |k, v| [MAPPINGS[k] || k, v] }]
-    success = execute(path, args)
+    success = execute(repo, path, args)
     $logger.error('git-notifier failed') unless success
     success
   end
 
   private
 
-  def self.execute(path, args = [])
+  def self.execute(repo, path, args = [])
     args = args.map do |k, v|
       v = v * ',' if k == 'mailinglist'
       next unless v
@@ -39,12 +45,16 @@ class GitNotifier
     success = true
     Dir.chdir(path)
     begin
-      $logger.debug('> git fetch origin +refs/heads/*:refs/heads/*')
-      success = system('git', 'fetch', 'origin', '+refs/heads/*:refs/heads/*')
-      raise "git fetch failed in #{path}" unless success
+      $logger.debug("> running in #{path}")
+      $logger.debug("> git init, fetch, and remote update for #{repo}")
+      system('git', '--bare', 'init', '--quiet')
+      system('git', '--bare', 'fetch', '--quiet', repo, '+refs/heads/*:refs/heads/*')
+      system('git', '--bare', 'fetch', '--quiet', repo, '+refs/tags/*:refs/tags/*')
+      system('git', 'remote', 'update')
+
       args = args.flatten.delete_if { |x| x.nil? }
-      $logger.debug("> git-notifier #{args}")
-      success = system('git-notifier', *args)
+      $logger.debug("> #{@@notifier_path}/git-notifier #{args}")
+      #success = system("#{@@notifier_path}/git-notifier", *args)
       raise "git-notifier failed in #{path} with args: #{args}" unless success
     rescue Exception => e
       $logger.error(e)
@@ -85,11 +95,11 @@ class GitDub
         entry['protocol'] ||= 'git'
         remote = case entry['protocol']
                  when /git/
-                   "git://github.com/#{user}/#{repo}.git"
+                   "git://github.com/#{user}/#{repo}"
                  when /ssh/
-                   "git@github.com:#{user}/#{repo}.git"
+                   "ssh://git@github.com/#{user}/#{repo}"
                  when /https/
-                   "https://github.com/#{user}/#{repo}.git"
+                   "https://github.com/#{user}/#{repo}"
                  else
                    $logger.error("invalid protocol: #{entry['protocol']}")
                    next
@@ -97,25 +107,16 @@ class GitDub
 
         dir = File.join(user, repo)
         if not Dir.exists?(dir)
-          $logger.debug("> git clone --bare #{remote} #{dir}")
-          if not system('git', 'clone', '--bare', remote, dir)
-            $logger.error("git failed to clone repository #{user}/#{repo}")
-            FileUtils.rm_rf(dir) if File.exists?(dir)
-            return
-          end
-          # Do not keep empty user directories.
-          if Dir[File.join(user, '*')].empty?
-            Dir.rmdir(user)
-          end
+          FileUtils.mkdir_p dir
         end
 
         state_file = File.join(dir, GitNotifier::STATE_FILE)
         if @silent_init and not File.exists?(state_file)
-          $logger.info("configuring git-notifer for silent update")
+          $logger.info("configuring git-notifier for silent update")
           opts['updateonly'] = true unless File.exists?(state_file)
         end
 
-        return GitNotifier.run(dir, opts)
+        return GitNotifier.run(remote, dir, opts)
       end
     end
     $logger.warn("no matching repository found for #{user}/#{repo}")
@@ -163,10 +164,12 @@ class GitDubServer < Sinatra::Base
 end
 
 def which(cmd)
-  ENV['PATH'].split(File::PATH_SEPARATOR).each do |path|
-    exe = "#{path}/#{cmd}"
-    return exe if File.executable?(exe)
+  current = Dir.pwd()
+  if File.exists?(current + "/git-notifier")
+    GitNotifier.set_notifier_path(current)
+    return true
   end
+
   nil
 end
 
@@ -208,8 +211,8 @@ if __FILE__ == $0
   end
 
   unless which('git-notifier')
-    $logger.error('could not find git-notifier in $PATH')
-    exit 1
+      $logger.error('could not find git-notifier in $PATH')
+      exit 1
   end
 
   if ARGV.size() != 1
