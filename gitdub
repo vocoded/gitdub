@@ -36,11 +36,17 @@ class GitNotifier
   private
 
   def self.execute(repo, path, args = [])
+    if args['committer']
+      args['sender'] = args['committer']
+      args.delete('committer')
+    end
+    
     args = args.map do |k, v|
       v = v * ',' if k == 'mailinglist'
       next unless v
       ["--#{k}"] + (!!v == v ? [] : ["#{v}"]) # Ignore non-boolean values.
     end
+
     current = Dir.pwd()
     success = true
     Dir.chdir(path)
@@ -79,13 +85,32 @@ class GitDub
     end
   end
 
+  def get_committer(push)
+    committer = nil
+    if push['head_commit'] && push['head_commit']['committer']
+      committer = push['head_commit']['committer']['email']
+    elsif push['pusher']
+      committer = push['pusher']['email']
+    end
+
+    committer
+  end
+
   def process(push)
     Dir.chdir(@dir)
     opts = @notifier.clone
     url = push['repository']['url']
     user = push['repository']['owner']['name']
     repo = push['repository']['name']
-    opts['link'] = "#{url}/compare/#{push['before']}...#{push['after']}"
+    opts['committer'] = get_committer(push)
+    if push['before'] == "0000000000000000000000000000000000000000"
+      opts['link'] = "#{url}/commit/#{push['after']}"
+    elsif push['after'] == "0000000000000000000000000000000000000000"
+      opts['link'] = push['compare']
+    else
+      opts['link'] = "#{url}/commit/#{push['after']}"
+      opts['compare'] = push['compare']
+    end
     $logger.info("received push from #{user}/#{repo} for commits "\
                  "#{push['before'][0..5]}...#{push['after'][0..5]}")
 
@@ -219,7 +244,7 @@ def run(config)
     }
 
     if config['gitdub']['ssl']['chain']
-      chain = File.open(config['gitdub']['ssl']['intcert']).read
+      chain = File.open(config['gitdub']['ssl']['chain']).read
       webrick_options[:SSLExtraChainCert] = [OpenSSL::X509::Certificate.new(chain)]
     end
 
